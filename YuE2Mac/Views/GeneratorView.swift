@@ -404,7 +404,6 @@ struct GeneratorView: View {
             .disabled(updateStatusText == "Checking…" || updateStatusText == "Up to date")
         }
         .padding(20).frame(width: 240)
-        .onAppear { if !didCheckUpdate { checkForUpdates() } }
     }
 
     @State private var updateStatusText = "Check for Updates"

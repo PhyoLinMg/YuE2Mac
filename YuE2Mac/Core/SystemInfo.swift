@@ -40,7 +40,7 @@ enum SystemInfo {
     /// Human guidance shown in the installer for each variant.
     static func variantNote(_ variant: String) -> String {
         switch variant {
-        case "8bit": return "Best balance of quality & memory (~2.6 GB in use)."
+        case "8bit": return "Best balance of quality & memory (~11 GB peak while generating)."
         case "4bit": return "Smallest — better for 8–12 GB Macs; slightly lower fidelity."
         case "bf16": return "Highest fidelity but needs 28 GB+ RAM. Not advised below that."
         default: return ""

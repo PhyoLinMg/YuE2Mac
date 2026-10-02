@@ -25,3 +25,5 @@ private/
 
 # App data written at runtime
 *.npy
+# Engine code downloaded by scripts/pin_engine.sh for review
+engine-review/

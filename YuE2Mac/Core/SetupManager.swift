@@ -6,6 +6,7 @@
 
 import Foundation
 import Observation
+import CryptoKit
 
 @Observable
 final class SetupManager {
@@ -15,6 +16,11 @@ final class SetupManager {
     /// modules live at the repo root; each quantized model variant is a folder
     /// (`8bit/`, `4bit/`, `bf16/`). Mirrored by `npario/YuE2-3B-MLX`.
     static let modelRepo = "ahmadw/YuE2-3B-MLX"
+
+    /// The engine's Python modules. They run unsandboxed with the user's
+    /// permissions, so they are only installed/used at the commit + SHA-256
+    /// pinned in `EnginePin` (see `scripts/pin_engine.sh`).
+    static let engineScripts = ["generate.py", "yue2_model.py", "yue2_vae.py"]
 
     var state: State = .idle
     var status = "Ready."
@@ -40,7 +46,7 @@ final class SetupManager {
         let variant = SettingsStore.shared.preferredVariant.isEmpty
             ? SystemInfo.recommendedVariant : SettingsStore.shared.preferredVariant
 
-        let scriptsOK = fm.fileExists(atPath: AppPaths.script("generate.py").path)
+        let scriptsOK = Self.installedScriptsMatchPin()
         let modelOK = fm.fileExists(atPath: AppPaths.modelDir(variant).appendingPathComponent("model.safetensors").path)
         let pythonOK = fm.fileExists(atPath: AppPaths.pythonBin.path)
 
@@ -53,10 +59,23 @@ final class SetupManager {
                 status = "Ready."
             } else {
                 state = .idle
-                status = settingsAreInstalled()
+                status = !EnginePin.isPinned
+                    ? "Engine code isn't pinned yet — run scripts/pin_engine.sh, review the files, then rebuild."
+                    : settingsAreInstalled()
                     ? "The Python environment needs to be set up once."
                     : "The engine isn't installed yet — press 'Download & Install'."
             }
+        }
+    }
+
+    /// True only if every engine script exists and matches its pinned SHA-256.
+    /// Catches edits to the installed copies as well as an unpinned build.
+    static func installedScriptsMatchPin() -> Bool {
+        guard EnginePin.isPinned else { return false }
+        return engineScripts.allSatisfy { name in
+            guard let data = FileManager.default.contents(atPath: AppPaths.script(name).path) else { return false }
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            return digest == EnginePin.scriptSHA256[name]
         }
     }
 
@@ -93,6 +112,10 @@ final class SetupManager {
         errorMessage = nil
         do {
             try AppPaths.prepare()
+
+            guard EnginePin.isPinned else {
+                throw InstallError("Engine code isn't pinned. Run scripts/pin_engine.sh, review the downloaded Python files, then rebuild the app.")
+            }
 
             // 1. Network reachable? We need to fetch the engine from Hugging Face.
             await setStatus("Checking internet…", 0.05)
@@ -163,20 +186,29 @@ final class SetupManager {
         // Stage the exact files we need (root *.py + one variant folder), then
         // copy them into the app's self-contained layout. The `.cache` folder
         // huggingface_hub leaves behind is ignored.
+        // Everything comes from the pinned commit, and the scripts are hash-checked
+        // before anything is copied into place.
         let script = """
-        import sys, shutil
+        import sys, shutil, json, hashlib
         from pathlib import Path
         from huggingface_hub import snapshot_download
 
-        repo, variant, staging, scripts, models = sys.argv[1:6]
+        repo, variant, staging, scripts, models, revision, pins = sys.argv[1:8]
         staging, scripts, models = Path(staging), Path(scripts), Path(models)
+        pins = json.loads(pins)
         local = staging / "repo"
         snapshot_download(
             repo_id=repo,
+            revision=revision,
             local_dir=str(local),
-            allow_patterns=[f"{variant}/*", "generate.py", "yue2_model.py", "yue2_vae.py"],
+            allow_patterns=[f"{variant}/*", *pins.keys()],
         )
-        for name in ("generate.py", "yue2_model.py", "yue2_vae.py"):
+        for name, expected in pins.items():
+            digest = hashlib.sha256((local / name).read_bytes()).hexdigest()
+            if digest != expected:
+                print(f"HASH_MISMATCH {name} {digest}")
+                sys.exit(3)
+        for name in pins:
             shutil.copy2(local / name, scripts / name)
         dest = models / variant
         if dest.exists():
@@ -187,12 +219,15 @@ final class SetupManager {
         let helper = AppPaths.stagingDir.appendingPathComponent("download_model.py")
         try script.write(to: helper, atomically: true, encoding: .utf8)
 
+        let pins = String(decoding: try JSONSerialization.data(withJSONObject: EnginePin.scriptSHA256), as: UTF8.self)
         let code = try await Shell.run(
             executable: python,
             arguments: [helper.path, Self.modelRepo, variant,
-                        AppPaths.stagingDir.path, AppPaths.scriptsDir.path, AppPaths.modelsDir.path],
+                        AppPaths.stagingDir.path, AppPaths.scriptsDir.path, AppPaths.modelsDir.path,
+                        EnginePin.revision, pins],
             log: { _ in })
         try? fm.removeItem(at: AppPaths.stagingDir)
+        if code == 3 { throw InstallError("Downloaded engine code doesn't match the pinned SHA-256. Refusing to install it.") }
         guard code == 0 else { throw InstallError("Model download failed. Check your network and retry.") }
     }
 

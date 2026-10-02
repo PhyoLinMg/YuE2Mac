@@ -48,7 +48,7 @@ The app sets up its own Python environment and dependencies automatically. Befor
 
 ## 📥 Installation
 
-1.  Build & run (see [Building](#building-and-running)), or download the latest `.app` from the [Releases page](https://github.com/arinltte/YuE2Mac/releases/latest).
+1.  **Pin the engine code first:** run `bash scripts/pin_engine.sh`, read the downloaded Python files in `engine-review/`, and approve. This writes the Hugging Face commit + SHA-256 of `generate.py`, `yue2_model.py` and `yue2_vae.py` into `YuE2Mac/Core/EnginePin.swift`; an unpinned build refuses to install or run the engine. Then build & run (see [Building](#building-and-running)).
 2.  On first launch, the **Setup screen** shows your Mac's spec (chip + RAM) and pre-selects a **model version**:
     *   **8-bit** — best quality/size balance, recommended for 16 GB+.
     *   **4-bit** — smallest, better for 8–12 GB Macs.

@@ -62,6 +62,12 @@ final class GenerationEngine {
             progressMessage = "Missing engine files. Run Setup from Settings."
             return
         }
+        // Re-check the pin right before running unsandboxed Python.
+        guard SetupManager.installedScriptsMatchPin() else {
+            phase = .failed
+            progressMessage = "Engine files don't match the pinned SHA-256. Reinstall from Settings."
+            return
+        }
 
         var args: [String] = [script, "--model", modelDir,
                               "--style", settings.effectiveStyle(),
@@ -93,7 +99,8 @@ final class GenerationEngine {
         process.environment = env
 
         let errPipe = Pipe()
-        process.standardOutput = Pipe()
+        // Nothing reads stdout; an unread Pipe fills (~64 KB) and blocks the engine.
+        process.standardOutput = FileHandle.nullDevice
         process.standardError = errPipe
         process.terminationHandler = { [weak self] proc in
             Task { @MainActor [weak self] in
@@ -147,8 +154,8 @@ final class GenerationEngine {
             // "[semantic] N tokens, X tok/s"
             phase = .ar
             let comps = trimmed.components(separatedBy: ",")
-            if let first = comps.first?.dropFirst(" [semantic] ".count),
-               let tokens = Int(String(first).trimmingCharacters(in: CharacterSet.decimalDigits.inverted)) {
+            if let match = firstMatch("^\\[semantic\\] (\\d+)", in: trimmed),
+               let tokens = match[1].flatMap({ Int($0) }) {
                 let maxTokens = Int(SettingsStore.shared.maxTokens)
                 let frac = maxTokens > 0 ? CGFloat(tokens) / CGFloat(maxTokens) : 0
                 progress = 0.08 + min(0.37 - 0.08, frac * 0.37)
